@@ -51,4 +51,6 @@ defmodule Plumbus.Mnesia do
   def dirty_write(tuple), do: :mnesia.dirty_write(tuple)
 
   def dirty_first(table), do: :mnesia.dirty_first(table)
+
+  def subscribe(topic), do: :mnesia.subscribe(topic)
 end

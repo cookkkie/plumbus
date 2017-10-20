@@ -57,8 +57,8 @@ defmodule Plumbus.Websocket do
   end
 
   def websocket_terminate(_reason, _conn, state) do
-    if state.zlib_stream do
-      :zlib.close(state.zlib_stream)
+    if state.zlib do
+      :zlib.close(state.zlib)
     end
   end
 

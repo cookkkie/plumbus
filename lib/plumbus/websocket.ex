@@ -1,33 +1,26 @@
-defmodule Plumbus.Websocket do
+defmodule Websocket do
   @behaviour :websocket_client
 
   require Logger
 
   def start(uri, opts \\ []) do
+    format = Keyword.get(opts, :format, :etf)
+    zlib_stream = Keyword.get(opts, :zlib_stream, false)
     :crypto.start()
     :ssl.start()
-    :websocket_client.start(uri, __MODULE__, {self(), opts})
+    :websocket_client.start(uri, __MODULE__, [self(), format, zlib_stream])
   end
 
-  def init({parent, opts}) do
-    format = Keyword.get(opts, :format, :etf)
-    zlib   =
-      if Keyword.get(opts, :zlib, false) do
+  def init([parent, format, zlib_stream]) do
+    zlib_stream =
+      if zlib_stream do
         z = :zlib.open()
         :zlib.inflateInit(z)
-        z
+        {<<>>, z}
       else
         nil
       end
-
-    state = %{
-      parent: parent,
-      format: format,
-      buffer: <<>>,
-      zlib:   zlib
-    }
-
-    {:once, state}
+    {:once, %{parent: parent, format: format, zlib_stream: zlib_stream}}
   end
 
   def onconnect(_, state) do
@@ -57,33 +50,34 @@ defmodule Plumbus.Websocket do
   end
 
   def websocket_terminate(_reason, _conn, state) do
-    if state.zlib do
-      :zlib.close(state.zlib)
+    if state.zlib_stream do
+      :zlib.close(state.zlib_stream)
     end
   end
 
-  def websocket_handle({dtype, data}, _socket, %{zlib: nil}=state) do
-    handle_data(data, state)
-  end
-
-  def websocket_handle({_dtype, packet}, _socket, %{zlib: z, buffer: buffer}=state) do
-    buffer     = buffer <> packet
-    last_bytes = packet |> :binary.bin_to_list() |> Enum.take(-4)
-
-    {buffer, data} = 
-      if last_bytes == [0, 0, 0xFF, 0xFF] do
-        uncompressed =
-          z
-          |> :zlib.inflate(buffer)
-          |> :erlang.iolist_to_binary()
-        {<<>>, uncompressed}
-      else
-        {buffer, nil}
-      end
+  def websocket_handle({_dtype, data}, _socket, %{zlib_stream: {buffer, z}}=state) do
+    size = byte_size(data)
+    buffer = buffer <> data
+    buffer_head_size = byte_size(data) - 4
     
+    {buffer, data} =
+      case buffer do
+        <<_::bytes-size(buffer_head_size), 0, 0, 255, 255>> ->
+          uncompressed =
+            :zlib.inflate(z, buffer)
+            |> :erlang.iolist_to_binary()
+          {<<>>, uncompressed}
+        data ->
+          {buffer, nil}
+      end
+
     if data, do: handle_data(data, state)
 
-    {:ok, %{state | buffer: buffer}}
+    {:ok, %{state | zlib_stream: {buffer, z}}}
+  end
+
+  def websocket_handle({dtype, data}, _socket, %{zlib_stream: nil}=state) do
+    handle_data(data, state)
   end
 
   def websocket_handle(data, _socket, state) do

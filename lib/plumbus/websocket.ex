@@ -1,4 +1,4 @@
-defmodule Websocket do
+defmodule Plumbus.Websocket do
   @behaviour :websocket_client
 
   require Logger

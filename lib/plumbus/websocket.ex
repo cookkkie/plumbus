@@ -51,8 +51,10 @@ defmodule Plumbus.Websocket do
 
   def websocket_terminate(_reason, _conn, state) do
     if state.zlib_stream do
-      :zlib.close(state.zlib_stream)
+      {_buffer, z} = state.zlib_stream
+      :zlib.close(z)
     end
+    :ok
   end
 
   def websocket_handle({_dtype, data}, _socket, %{zlib_stream: {buffer, z}}=state) do

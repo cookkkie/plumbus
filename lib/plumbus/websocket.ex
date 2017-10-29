@@ -1,64 +1,64 @@
 defmodule Plumbus.Websocket do
-  @behaviour :websocket_client
-
-  require Logger
+  use WebSockex
 
   def start(uri, opts \\ []) do
-    format = Keyword.get(opts, :format, :etf)
+    parent      = Keyword.get(opts, :parent, self())
+    format      = Keyword.get(opts, :format, :etf)
     zlib_stream = Keyword.get(opts, :zlib_stream, false)
-    :crypto.start()
-    :ssl.start()
-    :websocket_client.start(uri, __MODULE__, [self(), format, zlib_stream])
+
+    state = %{parent: parent, format: format, zlib_stream: zlib_stream}
+
+    WebSockex.start(uri, __MODULE__, state, async: true)
   end
 
-  def init([parent, format, zlib_stream]) do
+  def handle_connect(_conn, state) do
     zlib_stream =
-      if zlib_stream do
+      if state.zlib_stream do
         z = :zlib.open()
         :zlib.inflateInit(z)
         {<<>>, z}
       else
         nil
       end
-    {:once, %{parent: parent, format: format, zlib_stream: zlib_stream}}
+
+    state |> forward_frame(:connected)
+    {:ok, %{state | zlib_stream: zlib_stream}}
   end
 
-  def onconnect(_, state) do
-    state |> forward_frame(:connected)
+  def handle_disconnect(%{reason: reason}, state) do
+    state |> forward_frame({:close, reason})
     {:ok, state}
   end
 
-  def ondisconnect(reason, state) do
-    state |> forward_frame({:close, reason})
-    {:close, reason, state}
-  end
-
   def send(ws_pid, frame) do
-    :websocket_client.cast(ws_pid, frame)
+    WebSockex.send_frame(ws_pid, frame)
   end
 
-  def send_binary(ws_pid, frame) do
-    :websocket_client.cast(ws_pid, {:binary, frame})
+  def send_binary(ws_pid, bin) do
+    WebSockex.send_frame(ws_pid, {:binary, bin})
   end
 
-  def close(ws_pid, code) do
+  def close(ws_pid, code) when is_binary(code) do
+    close(ws_pid, String.to_integer(code))
+  end
+
+  def close(ws_pid, code) when is_number(code) do
     Kernel.send(ws_pid, {:close, code})
   end
 
-  def websocket_info({:close, code}, _conn, state) do
-    {:close, code |> to_string(), state}
+  def handle_info({:close, code}, state) do
+    {:close, {code, ""}, state}
   end
 
-  def websocket_terminate(_reason, _conn, state) do
+  def terminate(_reason, state) do
     if state.zlib_stream do
-      {_buffer, z} = state.zlib_stream
+      {_, z} = state.zlib_stream
       :zlib.close(z)
     end
     :ok
   end
 
-  def websocket_handle({_dtype, data}, _socket, %{zlib_stream: {buffer, z}}=state) do
-    size = byte_size(data)
+  def handle_frame({_dtype, data}, %{zlib_stream: {buffer, z}}=state) do
     buffer = buffer <> data
     buffer_head_size = byte_size(data) - 4
     
@@ -69,7 +69,7 @@ defmodule Plumbus.Websocket do
             :zlib.inflate(z, buffer)
             |> :erlang.iolist_to_binary()
           {<<>>, uncompressed}
-        data ->
+        _data ->
           {buffer, nil}
       end
 
@@ -78,12 +78,12 @@ defmodule Plumbus.Websocket do
     {:ok, %{state | zlib_stream: {buffer, z}}}
   end
 
-  def websocket_handle({dtype, data}, _socket, %{zlib_stream: nil}=state) do
+  def handle_frame({_dtype, data}, %{zlib_stream: nil}=state) do
     handle_data(data, state)
   end
 
-  def websocket_handle(data, _socket, state) do
-    forward_frame(state, data)
+  defp handle_data(data, %{format: nil}=state) do
+    forward_frame(state, {:data, data})
     {:ok, state}
   end
 
@@ -101,3 +101,4 @@ defmodule Plumbus.Websocket do
 
   defp decode(:etf, data), do: :erlang.binary_to_term(data)
 end
+

@@ -15,7 +15,7 @@ defmodule Plumbus.Mixfile do
   end
 
   defp deps do
-    [{:websocket_client, github: "mee6/websocket_client"},
+    [{:websockex, "~> 0.4.0"},
      {:poison, "~> 3.1"}]
   end
 end
